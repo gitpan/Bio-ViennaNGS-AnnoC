@@ -1,0 +1,17 @@
+Revision history for Perl extension ViennaNGS::AnnoC.
+
+0.01  Tue Sep 3 2013
+	- original version; created by h2xs 1.23 with options
+		-XA -n ViennaNGS::AnnoC
+
+0.04  Tue Sep 23 2014
+	- updated POD
+
+0.05  Wed Oct 1 2014
+	- export everything via @EXPORT_OK
+	- use Path::Class for path construction
+	- use Carp for error handling
+	- updated POD
+
+0.06	
+	- changed namespace to Bio::ViennaNGS::AnnoC
