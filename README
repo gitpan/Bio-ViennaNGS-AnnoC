@@ -1,8 +1,8 @@
 Bio::ViennaNGS::AnnoC
 =====================
 
-Bio::ViennaNGS::AnnoC is a Perl module for conversion between various
-sequence annotation formats used in computational biology.
+Bio::ViennaNGS::AnnoC is an object-oriented interface for storing and
+converting sequence annotation data used in computational biology.
 
 INSTALLATION
 
@@ -18,9 +18,9 @@ DEPENDENCIES
 This module requires these other modules and libraries:
 
   Bio::Tools::GFF 
-  Bio::DB::Fasta
-  Path::Class
+  Moose
   Carp
+  Path::Class
 
 AUTHOR
 

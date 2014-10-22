@@ -1,5 +1,5 @@
 {
-   "abstract" : "Perl extension for converting sequence annotation formats",
+   "abstract" : "Object-oriented interface for storing and converting biological sequence annotation formats",
    "author" : [
       "Michael T. Wolfinger <michael@wolfinger.eu>"
    ],
@@ -36,10 +36,11 @@
             "Bio::Tools::GFF" : "0",
             "Carp" : "0",
             "Data::Dumper" : "0",
+            "IPC::Cmd" : "0",
             "Path::Class" : "0"
          }
       }
    },
    "release_status" : "stable",
-   "version" : "v0.6.0"
+   "version" : "v0.7.0"
 }

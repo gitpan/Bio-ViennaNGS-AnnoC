@@ -1,167 +1,241 @@
 # -*-CPerl-*-
-# Last changed Time-stamp: <2014-10-02 19:17:12 mtw>
+# Last changed Time-stamp: <2014-10-22 14:03:15 mtw>
 
 package Bio::ViennaNGS::AnnoC;
 
-use Exporter;
-use version; our $VERSION = qv('0.06');
-use strict;
-use strict;
-use warnings;
-use Data::Dumper;
+use 5.12.0;
+use version; our $VERSION = qv('0.07');
+use Bio::ViennaNGS qw(sortbed);
 use Bio::Tools::GFF;
-use Bio::DB::Fasta;
+use IPC::Cmd qw(can_run run);
 use Path::Class;
 use Carp;
+use Moose;
+use namespace::autoclean;
 
-our @ISA       = qw(Exporter);
-our @EXPORT_OK = qw(parse_gff feature_summary get_fasta_ids
-		    $feat $fstat $fastadb
-		    @fastaids
-		    %features %featsta);
-our @EXPORT    = ();
+has 'accession' => (
+		    is => 'rw',
+		    isa => 'Str',
+		    predicate => 'has_accession',
+		   );
 
-#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^#
-#^^^^^^^^^^ Variables ^^^^^^^^^^^#
-#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^#
+has 'features' => (
+		   is => 'ro',
+		   isa => 'HashRef',
+		   predicate => 'has_features',
+		   default => sub { {} },
+		  );
 
-our ($fastadb);
-our %features  = ();
-our %featstat  = ();
-our $feat      = \%features;
-our $fstat     = \%featstat;
-our @fastaids  = ();
+has 'nr_features' => (
+		     is => 'ro',
+		     isa => 'Int',
+		     builder => '_get_nr_of_features',
+		     lazy => 1,
+		     );
 
-#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^#
-#^^^^^^^^^^^ Subroutines ^^^^^^^^^^#
-#^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^#
+has 'featstat' => (
+		   is => 'ro',
+		   isa => 'HashRef',
+		   builder => '_set_featstat',
+		   predicate => 'has_featstat',
+		   lazy => 1,
+		  );
+
+before 'featstat' => sub {
+  my $self = shift;
+  $self->_get_nr_of_features();
+};
+
+sub _set_featstat {
+  my $self = shift;
+  my $this_function = (caller(0))[3];
+  my %fs = ();
+  confess "ERROR [$this_function] \$self->features not available"
+    unless ($self->has_features);
+  $fs{total} = 0;
+  $fs{origin} = "$this_function ".$VERSION;
+  $fs{count} = $self->nr_features;
+  foreach my $uid ( keys %{$self->features} ){
+    my $gbkey = ${$self->features}{$uid}->{gbkey};
+    $fs{total} += 1;
+    unless (exists $fs{$gbkey}){
+      $fs{$gbkey} = 0;
+    }
+    $fs{$gbkey} += 1;
+  }
+  return \%fs;
+}
+
+sub _get_nr_of_features {
+  my $self = shift;
+  my $this_function = (caller(0))[3];
+  confess "ERROR [$this_function] \$self->features not available"
+    unless ($self->has_features);
+  return (keys %{$self->features});
+}
 
 sub parse_gff {
-  my $in_file = shift;
-  my ($i,$gffio,$feature,$gbkey);
+  my ($self,$in_file) = @_;
+  my ($i,$gffio,$header,$f,$gbkey);
   my $this_function = (caller(0))[3];
 
-  $gffio = Bio::Tools::GFF->new(-file        => $in_file,
+  $gffio = Bio::Tools::GFF->new(-file         => $in_file,
 				-gff_version  => 3,
 			       );
   $gffio->ignore_sequence(1);
-  if (my $header = $gffio->next_segment() ){
-    $featstat{accession}= $header->display_id();
+  if ($header = $gffio->next_segment() ){
+    $self->accession( $header->display_id() );
   }
-  else{
-    carp "[$this_function]: Cannot parse GFF header\n";
-  }
+  else{ carp "ERROR [$this_function] Cannot parse GFF header\n" }
 
-  while($feature = $gffio->next_feature()) {
+  while($f = $gffio->next_feature()) {
     my ($uid,$feat_name);
     my @name = my @id = my @gbkeys = ();
 
-    next if ($feature->primary_tag() eq "exon");
+    next if ($f->primary_tag() eq "exon");
 
     # 1) determine gbkey of the current feature
-    @gbkeys = $feature->get_tag_values("gbkey");
+    @gbkeys = $f->get_tag_values("gbkey");
     $gbkey  = $gbkeys[0];
 
     # 2) get a unique ID for each feature
-    if ($feature->has_tag('ID')){
-      @id = $feature->get_tag_values('ID');
+    if ($f->has_tag('ID')){
+      @id = $f->get_tag_values('ID');
       $uid = $id[0]; # ID=id101
     }
     else {
       croak "ERROR [$this_function] Feature '$gbkey' at pos.\
-             $feature->start does not have \'ID\' attribute\n";
+             $f->start does not have \'ID\' attribute\n";
     }
 
     # 3) assign parent's unique ID in case a parent record exists
-    if ($feature->has_tag('Parent')){
-      @id = $feature->get_tag_values('Parent');
+    if ($f->has_tag('Parent')){
+      @id = $f->get_tag_values('Parent');
       $uid = $id[0]; # ID=id101
     }
 
     # 4) find a name for the current feature, use 'Name' or 'ID' attribute
-    if ($feature->has_tag('Name')){
-      @name = $feature->get_tag_values('Name');
+    if ($f->has_tag('Name')){
+      @name = $f->get_tag_values('Name');
       $feat_name = $name[0];
     }
-    elsif ($feature->has_tag('ID')){
-      @id = $feature->get_tag_values('ID');
+    elsif ($f->has_tag('ID')){
+      @id = $f->get_tag_values('ID');
       $feat_name = $id[0]; # ID=id101, use ID as feature name
     }
     else {
       croak "ERROR [$this_function] Cannot set name for feature \
-              $feature->gbkey at pos. $feature->start\n";
+              $f->gbkey at pos. $f->start\n";
     }
 
-    unless (exists $features{$uid}) { # gene / ribosome_entry_site / etc.
-      $features{$uid}->{start}     = $feature->start;
-      $features{$uid}->{end}       = $feature->end;
-      $features{$uid}->{strand}    = $feature->strand;
-      $features{$uid}->{length}    = $feature->length;
-      $features{$uid}->{seqid}     = $feature->seq_id;
-      $features{$uid}->{score}     = $feature->score || 0;
-      $features{$uid}->{gbkey}     = $gbkey;
-      $features{$uid}->{name}      = $feat_name;
-      $features{$uid}->{uid}       = $uid;
+    unless (exists ${$self->features}{$uid}) { # gene / ribosome_entry_site / etc.
+      ${$self->features}{$uid}->{start}   = $f->start;
+      ${$self->features}{$uid}->{end}     = $f->end;
+      ${$self->features}{$uid}->{strand}  = $f->strand;
+      ${$self->features}{$uid}->{length}  = $f->length;
+      ${$self->features}{$uid}->{seqid}   = $f->seq_id;
+      ${$self->features}{$uid}->{score}   = $f->score || 0;
+      ${$self->features}{$uid}->{gbkey}   = $gbkey;
+      ${$self->features}{$uid}->{name}    = $feat_name;
+      ${$self->features}{$uid}->{uid}     = $uid;
     }
-    else { # CDS / tRNA / rRNA / etc
-      $features{$uid}->{gbkey} = $gbkey;  # gbkey for tRNA/ rRNA/ CDS etc
+    else { # CDS / tRNA / rRNA / etc.
+      ${$self->features}{$uid}->{gbkey} = $gbkey;  # gbkey for tRNA/ rRNA/ CDS etc
     }
-  }
-
-  # finally generate some statistics on features present in this annotation
-  $featstat{total} = 0;
-  $featstat{origin} = "$this_function ".$VERSION;
-  foreach my $ft (keys %features){
-    $featstat{total}++;
-    my $key = $features{$ft}->{gbkey};
-    unless (exists $featstat{$key}){
-      $featstat{$key} = 0;
-    }
-    $featstat{$key} += 1;
   }
   $gffio->close();
- # print Dumper (\%features);
 }
 
-# feature_summary($fsR,$dest)
-# Print summary of %featstat hash
-#
-# ARG1: reference to %featstat hash
-# ARG2: path for output file
+sub features2bed {
+ my ($self,$gbkey,$dest,$bn,$log) = @_;
+ my ($chrom,$chrom_start,$chrom_end,$name,$score,$strand,$thick_start);
+ my ($thick_end,$reserved,$block_count,$block_sizes,$block_starts);
+ my @ft = ();
+ my $this_function = (caller(0))[3];
+ my $bedtools = can_run('bedtools') or
+   croak "ERROR [$this_function] Cannot find 'bedtools' utility";
+
+ croak "ERROR [$this_function] $self->features not available"
+   unless ($self->has_features);
+ croak "ERROT [$this_function] $self->featstat not available"
+   unless ($self->has_featstat);
+ croak "ERROR [$this_function] $dest does not exist"
+    unless (-d $dest);
+ if (defined $log){open(LOG, ">>", $log) or croak $!;}
+
+ if (defined $gbkey){ # dump features of just one genbank key
+   confess "ERROR [$this_function] genbank key \'$gbkey\' N/A in hash "
+     unless (exists ${$self->featstat}{$gbkey});
+   $ft[0] = $gbkey;
+ }
+ else{ # dump features for all genbank keys
+   foreach my $gbk (keys %{$self->featstat}) {
+     next if ($gbk eq 'total' || $gbk eq 'Src' || $gbk eq 'accession' ||
+	      $gbk eq 'origin' || $gbk eq 'count');
+     push @ft,$gbk;
+   }
+ }
+
+ foreach my $f (@ft){
+   my $bedname   = file($dest,"$bn.$f.bed");
+   my $bedname_u = file($dest,"$bn.$f.u.bed");
+   open (BEDOUT, "> $bedname_u") or croak $!;
+
+   # dump unsorted gene annotation from DS to BED12
+   foreach my $uid (keys %{$self->features}){
+      next unless (${$self->features}{$uid}->{gbkey} eq $f);
+      my @bedline = ();
+      $chrom        = ${$self->features}{$uid}->{seqid};
+      $chrom_start  = ${$self->features}{$uid}->{start};
+      $chrom_start--; # BED is 0-based
+      $chrom_end    = ${$self->features}{$uid}->{end};
+      $name         = ${$self->features}{$uid}->{name};
+      $score        = ${$self->features}{$uid}->{score};
+      $strand       = ${$self->features}{$uid}->{strand} == -1 ? '-' : '+'; #default to +
+      $thick_start  = $chrom_start;
+      $thick_end    = $chrom_end;
+      $reserved     = 0; 
+      $block_count  = 1;
+      $block_sizes  = ${$self->features}{$uid}->{length}.",";
+      $block_starts = "0,";
+      @bedline = join ("\t", ($chrom,$chrom_start,$chrom_end,
+			      $name,$score,$strand,$thick_start,
+			      $thick_end,$reserved,$block_count,
+			      $block_sizes, $block_starts));
+      print BEDOUT "@bedline\n";
+    }
+   close (BEDOUT);
+
+   sortbed($bedname_u,".",$bedname,1,undef);  # sort bed file
+
+ } # end foreach
+ if (defined $log){close(LOG)};
+}
+
 sub feature_summary {
-  my ($fsR, $dest) = @_;
+  my ($self, $dest) = @_;
   my ($fn,$fh);
   my $this_function = (caller(0))[3];
 
   croak "ERROR [$this_function] $dest does not exist\n"
     unless (-d $dest);
+  croak "ERROR [$this_function] $self->accession not available\n"
+    unless ($self->has_accession);
 
-  $fn = dir($dest,$$fsR{accession}.".summary.txt");
+  $fn = dir($dest,$self->accession.".summary.txt");
   open $fh, ">", $fn or croak $!;
 
-  print $fh "Accession\t $$fsR{accession}\n";
-  print $fh "Origin   \t $$fsR{origin}\n";
-  foreach my $ft (sort keys %$fsR){
+  print $fh "Accession\t ".$self->accession."\n";
+  print $fh "Origin   \t ${$self->featstat}{origin}\n";
+  foreach my $ft (sort keys %{$self->featstat}){
     next if ($ft =~ /total/ || $ft =~ /accession/ || $ft =~ /origin/);
-    print $fh "$ft\t$$fsR{$ft}\n";
+    print $fh "$ft\t${$self->featstat}{$ft}\n";
   }
-  print $fh "Total\t$$fsR{total}\n";
+  print $fh "Total\t${$self->featstat}{total}\n";
   close $fh;
 }
 
-# get_fasta_ids($fa_in)
-# Returns an array with all fasta ids from a (multi)fasta file
-#
-# ARG1: fa_in
-sub get_fasta_ids {
-  my $fa_in = shift;
-  unless (defined $fa_in){
-    confess "Fasta input not available";
-  }
-  $fastadb = Bio::DB::Fasta->new($fa_in) or die $!;
-  @fastaids = $fastadb->ids;
-  return @fastaids;
-}
+__PACKAGE__->meta->make_immutable;
 
 1;
 
@@ -169,45 +243,78 @@ __END__
 
 =head1 NAME
 
-Bio::ViennaNGS::AnnoC - Perl extension for converting sequence
-annotation formats
+Bio::ViennaNGS::AnnoC - Object-oriented interface for storing and
+converting biological sequence annotation formats
 
 =head1 SYNOPSIS
 
   use Bio::ViennaNGS::AnnoC;
 
-  parse_gff($gff3_file);
-  feature_summary($fstat,$dest);
-  get_fasta_ids($fasta_file);
+  my $obj = Bio::ViennaNGS::AnnoC->new();
+
+  # parse GFF3 file to internal data straucture
+  $obj->parse_gff($gff3_file);
+
+  # compute summary of parsed annotation
+  $obj->featstat;
+
+  # dump feature summary to file
+  $obj->feature_summary($dest);
+
+  # dump all tRNAs contained in data structure as BED12
+  $obj->features2bed("tRNA",$dest,$bn,$log)
 
 =head1 DESCRIPTION
 
-=over 3
+This module provides an object-oriented interface for storing and
+converting biological sequence annotation data. Based on the C<Moose>
+object system, it maintains a central data structure which is curently
+designed to represent simple, non-spliced (ie single-exon) annotation
+data. Future versions of the module will account for more generic
+scenarios, including spliced isoforms.
 
-=item parse_gff($gff3_file)
+=head1 METHODS
 
-C<parse_gff()> parses GFF3 annotation files. The GFF3 specification is
-available at L<http://www.sequenceontology.org/resources/gff3.html>
-This routine expects the path to a GFF3 file as argument C<$gff3_file>
-and returns two hash references: C<$feat> is a reference to a HOH
-containing the raw annotation information for each feature found in
-the GFF3 file. C<$fstat> references a hash containing summary statistics
-of the features found in the GFF3 file.
+=over
 
-This routine has been tested with NCBI bacteria GFF3 annotation. 
+=item parse_gff
 
-=item feature_summary($fstat,$dest)
+ Title   : parse_gff
+ Usage   : $obj->parse_gff($gff3_file);
+ Function: Parses GFF3 annotation files of non-spliced genomes into
+           C<$self->features>
+ Args    : The full path to a GFF3 file
+ Returns :
+ Notes   : The GFF3 specification is available at
+           L<http://www.sequenceontology.org/resources/gff3.html>.
+           This routine has been tested with NCBI bacteria GFF3
+           annotation.
 
-This routine generates a summary file for all features parsed by
-parse_gff. It expects two arguments: C<$fstat> is a refence to the
-summary hash generated by C<parse_gff()> and C<$dest> is the output
-path for a summary.txt file.
+=item feature_summary
 
-=item get_fasta_ids($fasta_file)
+ Title   : feature_summary
+ Usage   : $obj->feature_summary($dest);
+ Function: Generate a summary file for all features present in
+           C<$self->features> 
+ Args    : Full output path for summary.txt file
+ Returns :
 
-C<get_fasta_ids()> returns an array containing all headers/IDs of a
-Fasta file as L<Bio::DB:Fasta> objects. The Fasta file may contain
-multiple entries.
+
+=item features2bed
+
+ Title   : features2bed
+ Usage   : $obj->features2bed($feature,$workdir,$bn,$log);
+ Function: Dumps genomic features from C<$self->features> hash to a
+           BED12 file.
+ Args    : C<$gbkey> can be either a string corresponding to a
+           genbank key in C<$self->featstat> or C<undef>. If defined,
+           only features of the speficied key will be dumped to a single
+           BED12 file. If C<$gbkey> is C<undef>, BED12 files will be
+           generated for each type present in C<$self->featstat>.
+           C<$dest> is the output directory and C<$bn> the basename for
+           all output files. C<$log> is either be the full path to a
+           logfile or C<undef>.
+ Returns  :
 
 =back
 
@@ -217,14 +324,13 @@ multiple entries.
 
 =item L<Bio::Tools::GFF>
 
-=item L<Bio::DB::Fasta>
+=item L<IPC::Cmd>
 
 =item L<Path::Class>
 
 =item L<Carp>
 
 =back
-
 
 =head1 AUTHORS
 

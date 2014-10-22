@@ -13,5 +13,13 @@ Revision history for Perl extension ViennaNGS::AnnoC.
 	- use Carp for error handling
 	- updated POD
 
-0.06	
+0.06  Fri Oct 2 2014	
 	- changed namespace to Bio::ViennaNGS::AnnoC
+
+0.07  Wed Oct 22 2014
+	- requires Perl >= 5.12.0
+	- Bio::ViennaNGS::Annoc is now based on Moose
+	- added features2bed()
+	- outsourced BED sorting routine sortbed() to Bio::ViennaNGS
+	- updated POD
+	
