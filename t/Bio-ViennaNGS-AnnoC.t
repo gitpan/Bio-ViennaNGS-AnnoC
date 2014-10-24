@@ -7,12 +7,9 @@
 
 use strict;
 use warnings;
-use IPC::Cmd qw(can_run);
 
-use Test::More tests => 2;
+use Test::More tests => 1;
 BEGIN { use_ok('Bio::ViennaNGS::AnnoC') };
-
-ok( defined(can_run('bedtools')), 'bedtools not found');
 
 #########################
 

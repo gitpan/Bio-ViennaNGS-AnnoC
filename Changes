@@ -23,3 +23,6 @@ Revision history for Perl extension ViennaNGS::AnnoC.
 	- outsourced BED sorting routine sortbed() to Bio::ViennaNGS
 	- updated POD
 	
+0.08
+	- removed bedtools dependency
+	- removed IPC::Cmd dependency from lib and tests 
